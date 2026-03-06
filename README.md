@@ -22,4 +22,5 @@ if error
 chmod +x ./scripts/install_app.sh
 ./scripts/install_app.sh
 
+or use a dmg
 
