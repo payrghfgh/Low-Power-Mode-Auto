@@ -1,0 +1,4 @@
+.DS_Store
+LowPowerAuto/.build/
+LowPowerAuto/dist/
+LowPowerAuto/vendor/bclm/.build/
