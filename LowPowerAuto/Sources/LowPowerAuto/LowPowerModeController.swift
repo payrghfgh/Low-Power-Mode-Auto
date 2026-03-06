@@ -6,7 +6,19 @@ enum CommandResult {
     case failure(String)
 }
 
+enum ChargeBackend: String {
+    case nativeBclm = "Native bclm"
+    case pmsetBclm = "pmset bclm"
+    case pmsetInhibit = "pmset chargeInhibit"
+    case softwareGuard = "Software guard"
+    case disabled = "Disabled"
+    case unknown = "Unknown"
+}
+
 final class LowPowerModeController {
+    private(set) var lastChargeBackend: ChargeBackend = .unknown
+    private(set) var lastChargeError: String?
+
     func effectiveChargeLimit(percent: Int) -> Int {
         let clamped = max(50, min(percent, 100))
         if isAppleSilicon() {
@@ -66,11 +78,15 @@ final class LowPowerModeController {
         if enabled {
             let bclmResult = runPrivilegedBclmWrite(limit: clamped)
             if case .success = bclmResult {
+                lastChargeBackend = .nativeBclm
+                lastChargeError = nil
                 return .success
             }
 
             let pmsetBclmResult = runPrivilegedPmset(arguments: ["-a", "bclm", "\(clamped)"])
             if case .success = pmsetBclmResult {
+                lastChargeBackend = .pmsetBclm
+                lastChargeError = nil
                 return .success
             }
 
@@ -79,18 +95,31 @@ final class LowPowerModeController {
             let inhibitResult = runPrivilegedPmset(arguments: ["-b", "chargeInhibit", inhibitValue])
             switch inhibitResult {
             case .success:
+                lastChargeBackend = .pmsetInhibit
+                lastChargeError = nil
                 return .success
             case let .failure(inhibitError):
                 if case let .failure(pmsetBclmError) = pmsetBclmResult {
                     if isPmsetUnsupportedError(pmsetBclmError) && isPmsetUnsupportedError(inhibitError) {
+                        lastChargeBackend = .unknown
+                        lastChargeError = "Charge limiting isn't supported by pmset on this Mac"
                         return .failure("Charge limiting isn't supported by pmset on this Mac")
                     }
                     if case let .failure(nativeBclmError) = bclmResult {
-                        return .failure("Failed to set charge limit (bclm: \(nativeBclmError), pmset bclm: \(pmsetBclmError), chargeInhibit: \(inhibitError))")
+                        let message = "Failed to set charge limit (bclm: \(nativeBclmError), pmset bclm: \(pmsetBclmError), chargeInhibit: \(inhibitError))"
+                        lastChargeBackend = .unknown
+                        lastChargeError = message
+                        return .failure(message)
                     }
-                    return .failure("Failed to set charge limit (pmset bclm: \(pmsetBclmError), chargeInhibit: \(inhibitError))")
+                    let message = "Failed to set charge limit (pmset bclm: \(pmsetBclmError), chargeInhibit: \(inhibitError))"
+                    lastChargeBackend = .unknown
+                    lastChargeError = message
+                    return .failure(message)
                 }
-                return .failure("Failed to set charge limit: \(inhibitError)")
+                let message = "Failed to set charge limit: \(inhibitError)"
+                lastChargeBackend = .unknown
+                lastChargeError = message
+                return .failure(message)
             }
         } else {
             // Best effort reset: clear charge-inhibit and charge limit cap.
@@ -98,37 +127,35 @@ final class LowPowerModeController {
             let inhibitReset = runPrivilegedPmset(arguments: ["-b", "chargeInhibit", "0"])
             if case .success = inhibitReset {
                 _ = runPrivilegedPmset(arguments: ["-a", "bclm", "100"])
+                lastChargeBackend = .disabled
+                lastChargeError = nil
                 return .success
             }
 
             let bclmReset = runPrivilegedPmset(arguments: ["-a", "bclm", "100"])
             switch bclmReset {
             case .success:
+                lastChargeBackend = .disabled
+                lastChargeError = nil
                 return .success
             case let .failure(bclmError):
                 if case let .failure(inhibitError) = inhibitReset {
                     if isPmsetUnsupportedError(bclmError) && isPmsetUnsupportedError(inhibitError) {
+                        lastChargeBackend = .disabled
+                        lastChargeError = nil
                         return .success
                     }
-                    return .failure("Failed to disable charge limit (bclm: \(bclmError), chargeInhibit: \(inhibitError))")
+                    let message = "Failed to disable charge limit (bclm: \(bclmError), chargeInhibit: \(inhibitError))"
+                    lastChargeBackend = .unknown
+                    lastChargeError = message
+                    return .failure(message)
                 }
-                return .failure("Failed to disable charge limit: \(bclmError)")
+                let message = "Failed to disable charge limit: \(bclmError)"
+                lastChargeBackend = .unknown
+                lastChargeError = message
+                return .failure(message)
             }
         }
-    }
-
-    func runExternalCommand(_ command: String) -> CommandResult {
-        let trimmed = command.trimmingCharacters(in: .whitespacesAndNewlines)
-        guard !trimmed.isEmpty else {
-            return .failure("External command is empty")
-        }
-        let result = runProcess("/bin/zsh", ["-lc", trimmed])
-        if result.status == 0 {
-            return .success
-        }
-        let rawError = result.stderr.isEmpty ? result.stdout : result.stderr
-        let errorText = sanitizeError(rawError.isEmpty ? "Command failed" : rawError)
-        return .failure(errorText)
     }
 
     func isUnsupportedChargeLimitError(_ text: String) -> Bool {
@@ -139,6 +166,11 @@ final class LowPowerModeController {
         return lower.contains("failedtoopen") ||
             lower.contains("smcresult") ||
             lower.contains("kiorreturn: 268435459")
+    }
+
+    func markSoftwareGuardActive() {
+        lastChargeBackend = .softwareGuard
+        lastChargeError = nil
     }
 
     func configurePasswordlessSudo() -> CommandResult {

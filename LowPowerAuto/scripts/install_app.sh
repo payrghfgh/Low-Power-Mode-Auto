@@ -3,7 +3,8 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="LowPowerAuto.app"
-APP_ROOT="$ROOT_DIR/dist/$APP_NAME"
+STAGE_DIR="$ROOT_DIR/dist/.staging"
+APP_ROOT="$STAGE_DIR/$APP_NAME"
 BIN_SRC="$ROOT_DIR/.build/arm64-apple-macosx/debug/LowPowerAuto"
 BCLM_SRC="$ROOT_DIR/vendor/bclm/.build/release/bclm"
 
@@ -11,6 +12,7 @@ cd "$ROOT_DIR"
 swift build
 swift build -c release --package-path "$ROOT_DIR/vendor/bclm"
 
+mkdir -p "$STAGE_DIR"
 rm -rf "$APP_ROOT"
 mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
 cp "$BIN_SRC" "$APP_ROOT/Contents/MacOS/LowPowerAuto"

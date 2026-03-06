@@ -12,6 +12,14 @@ final class ChargeLimitAlertManager {
         UNUserNotificationCenter.current().requestAuthorization(options: [.alert, .sound]) { _, _ in }
     }
 
+    func refreshAuthorizationStatus() async -> Bool {
+        await withCheckedContinuation { continuation in
+            UNUserNotificationCenter.current().getNotificationSettings { settings in
+                continuation.resume(returning: settings.authorizationStatus == .authorized)
+            }
+        }
+    }
+
     func notifyChargeLimitReached(limit: Int, current: Int) {
         let content = UNMutableNotificationContent()
         content.title = "Charge Limit Reached"

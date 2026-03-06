@@ -33,7 +33,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         let popover = NSPopover()
         popover.behavior = .transient
-        popover.contentSize = NSSize(width: 340, height: 260)
+        popover.contentSize = NSSize(width: 420, height: 560)
         popover.contentViewController = NSHostingController(rootView: StatusMenuView(viewModel: viewModel))
 
         self.statusItem = statusItem
@@ -67,7 +67,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         let batteryLevel = Double(viewModel.batteryPercent ?? 100) / 100.0
 
         var image: NSImage?
-        if viewModel.isCharging {
+        if viewModel.menuIconStyle == .bolt {
+            image = NSImage(systemSymbolName: "bolt.circle.fill", accessibilityDescription: "LowPowerAuto")
+        } else if viewModel.isCharging {
             image = NSImage(systemSymbolName: "battery.100.bolt", accessibilityDescription: "Battery charging")
         } else if #available(macOS 13.0, *) {
             image = NSImage(
@@ -81,12 +83,18 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         if let image {
             if #available(macOS 12.0, *) {
-                let config = NSImage.SymbolConfiguration(hierarchicalColor: iconColor)
-                button.image = image.withSymbolConfiguration(config)
+                if viewModel.menuIconStyle == .monochrome {
+                    button.image = image
+                    button.image?.isTemplate = true
+                } else {
+                    let config = NSImage.SymbolConfiguration(hierarchicalColor: iconColor)
+                    button.image = image.withSymbolConfiguration(config)
+                    button.image?.isTemplate = false
+                }
             } else {
                 button.image = image
+                button.image?.isTemplate = true
             }
-            button.image?.isTemplate = false
         } else {
             button.image = nil
         }

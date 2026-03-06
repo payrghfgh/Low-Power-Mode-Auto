@@ -12,6 +12,9 @@ A small menu bar app that monitors battery percentage and enables macOS Low Powe
 - When battery percentage rises above threshold, it disables Low Power Mode.
 - Can set a battery charge limit (for example 80%) to stop charging above that level.
 - Supports one-time passwordless setup so you do not get repeated admin prompts.
+- Includes `Force Low Power` and `Force Normal` controls.
+- Includes onboarding, diagnostics panel, and daily battery stats.
+- Includes update checks against GitHub latest release.
 
 ## Build and run
 
@@ -47,6 +50,25 @@ cd "/Users/rushian/LOW POWER MODE/LowPowerAuto"
 Output package:
 
 `/Users/rushian/LOW POWER MODE/LowPowerAuto/dist/LowPowerAutoInstaller.pkg`
+
+### Signed package (optional)
+
+```bash
+cd "/Users/rushian/LOW POWER MODE/LowPowerAuto"
+APP_SIGN_IDENTITY="Developer ID Application: Your Name (TEAMID)" \
+PKG_SIGN_IDENTITY="Developer ID Installer: Your Name (TEAMID)" \
+./scripts/build_pkg.sh
+```
+
+### Notarize package (optional)
+
+```bash
+cd "/Users/rushian/LOW POWER MODE/LowPowerAuto"
+APPLE_ID="you@example.com" \
+APPLE_TEAM_ID="TEAMID" \
+APPLE_APP_PASSWORD="app-specific-password" \
+./scripts/notarize_pkg.sh
+```
 
 ## Notes
 

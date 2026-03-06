@@ -3,16 +3,20 @@ set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "$0")/.." && pwd)"
 APP_NAME="LowPowerAuto.app"
-APP_ROOT="$ROOT_DIR/dist/$APP_NAME"
+STAGE_DIR="$ROOT_DIR/dist/.staging"
+APP_ROOT="$STAGE_DIR/$APP_NAME"
 PKG_PATH="$ROOT_DIR/dist/LowPowerAutoInstaller.pkg"
 BIN_SRC="$ROOT_DIR/.build/arm64-apple-macosx/debug/LowPowerAuto"
 BCLM_SRC="$ROOT_DIR/vendor/bclm/.build/release/bclm"
+APP_SIGN_IDENTITY="${APP_SIGN_IDENTITY:--}"
+PKG_SIGN_IDENTITY="${PKG_SIGN_IDENTITY:-}"
 
 cd "$ROOT_DIR"
 
 swift build
 swift build -c release --package-path "$ROOT_DIR/vendor/bclm"
 
+mkdir -p "$STAGE_DIR"
 rm -rf "$APP_ROOT" "$PKG_PATH"
 mkdir -p "$APP_ROOT/Contents/MacOS" "$APP_ROOT/Contents/Resources"
 cp "$BIN_SRC" "$APP_ROOT/Contents/MacOS/LowPowerAuto"
@@ -50,14 +54,22 @@ cat > "$APP_ROOT/Contents/Info.plist" <<'PLIST'
 </plist>
 PLIST
 
-codesign --force --deep --sign - "$APP_ROOT"
+codesign --force --deep --sign "$APP_SIGN_IDENTITY" "$APP_ROOT"
 
-pkgbuild \
+PKG_ARGS=(
   --component "$APP_ROOT" \
   --install-location "/Applications" \
   --identifier "com.lowpowermode.auto" \
-  --version "1.0.0" \
-  "$PKG_PATH"
+  --version "1.0.0"
+)
+
+if [[ -n "$PKG_SIGN_IDENTITY" ]]; then
+  PKG_ARGS+=(--sign "$PKG_SIGN_IDENTITY")
+fi
+
+PKG_ARGS+=("$PKG_PATH")
+
+pkgbuild "${PKG_ARGS[@]}"
 
 pkgutil --check-signature "$PKG_PATH" || true
 
