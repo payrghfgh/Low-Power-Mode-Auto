@@ -32,11 +32,15 @@ final class LowPowerModeViewModel: ObservableObject {
 
     @Published var batteryPercent: Int?
     @Published var isCharging: Bool = false
+    @Published var isPluggedIn: Bool = false
     @Published var lowPowerModeEnabled: Bool = false
+    @Published var chargeTargetPercent: Int = 100
+    @Published var chargeEtaText: String = "--"
 
     @Published var chargeLimitEnabled: Bool {
         didSet {
             defaults.set(chargeLimitEnabled, forKey: DefaultsKeys.chargeLimitEnabled)
+            refreshChargeEstimate()
             applyChargeLimitIfNeeded(force: true)
         }
     }
@@ -48,6 +52,7 @@ final class LowPowerModeViewModel: ObservableObject {
                 return
             }
             defaults.set(chargeLimitPercent, forKey: DefaultsKeys.chargeLimitPercent)
+            refreshChargeEstimate()
             applyChargeLimitIfNeeded(force: true)
         }
     }
@@ -138,6 +143,8 @@ final class LowPowerModeViewModel: ObservableObject {
     private var attemptedAutoPasswordlessRepair = false
     private var didAlertChargeLimitInCurrentCycle = false
     private var softwareGuardActive = false
+    private var minutesToFullCharge: Int?
+    private var chargingSamples: [(date: Date, percent: Int)] = []
 
     init(defaults: UserDefaults = .standard) {
         self.defaults = defaults
@@ -195,6 +202,10 @@ final class LowPowerModeViewModel: ObservableObject {
                 guard let self else { return }
                 self.batteryPercent = state.percentage
                 self.isCharging = state.isCharging
+                self.isPluggedIn = state.isPluggedIn
+                self.minutesToFullCharge = state.minutesToFullCharge
+                self.recordChargingSample()
+                self.refreshChargeEstimate()
                 self.statsManager.recordSample(percent: state.percentage, isCharging: state.isCharging)
                 self.refreshStats()
                 self.applyChargeLimitIfNeeded(force: false)
@@ -210,10 +221,16 @@ final class LowPowerModeViewModel: ObservableObject {
         if let state = batteryMonitor.currentBatteryState() {
             batteryPercent = state.percentage
             isCharging = state.isCharging
+            isPluggedIn = state.isPluggedIn
+            minutesToFullCharge = state.minutesToFullCharge
         } else {
             batteryPercent = nil
             isCharging = false
+            isPluggedIn = false
+            minutesToFullCharge = nil
         }
+        recordChargingSample()
+        refreshChargeEstimate()
 
         lowPowerModeEnabled = lowPowerController.isLowPowerModeEnabled()
         refreshDiagnostics()
@@ -222,6 +239,7 @@ final class LowPowerModeViewModel: ObservableObject {
 
     func applyNow() {
         applyChargeLimitIfNeeded(force: true)
+        refreshChargeEstimate()
         evaluateAndApplyPolicy(reason: "Manual check")
     }
 
@@ -319,6 +337,101 @@ final class LowPowerModeViewModel: ObservableObject {
             chargeLimitPercent = 100
         }
         applyChargeLimitIfNeeded(force: true)
+    }
+
+    private func refreshChargeEstimate() {
+        chargeTargetPercent = chargeLimitEnabled
+            ? lowPowerController.effectiveChargeLimit(percent: chargeLimitPercent)
+            : 100
+
+        guard let currentPercent = batteryPercent else {
+            chargeEtaText = "--"
+            return
+        }
+
+        if currentPercent >= chargeTargetPercent {
+            chargeEtaText = "Reached"
+            return
+        }
+
+        guard isPluggedIn else {
+            chargeEtaText = "Plug in charger"
+            return
+        }
+
+        guard isCharging else {
+            chargeEtaText = "Waiting to charge"
+            return
+        }
+
+        let baseMinutesToFull = minutesToFullCharge ?? estimatedMinutesToFullFromSamples()
+        guard let baseMinutesToFull, baseMinutesToFull > 0 else {
+            chargeEtaText = "Calculating..."
+            return
+        }
+
+        let remainingToTarget = max(0, chargeTargetPercent - currentPercent)
+        let remainingToFull = max(1, 100 - currentPercent)
+        let scaledMinutes: Int
+        if chargeTargetPercent >= 100 {
+            scaledMinutes = baseMinutesToFull
+        } else {
+            let ratio = Double(remainingToTarget) / Double(remainingToFull)
+            scaledMinutes = Int((Double(baseMinutesToFull) * ratio).rounded())
+        }
+
+        let etaMinutes = max(1, scaledMinutes)
+        chargeEtaText = "\(formattedDuration(minutes: etaMinutes)) to \(chargeTargetPercent)%"
+    }
+
+    private func recordChargingSample() {
+        guard let batteryPercent, isPluggedIn, isCharging else {
+            chargingSamples.removeAll()
+            return
+        }
+
+        let now = Date()
+        if chargingSamples.last?.percent != batteryPercent {
+            chargingSamples.append((date: now, percent: batteryPercent))
+        }
+
+        let cutoff = now.addingTimeInterval(-45 * 60)
+        chargingSamples.removeAll { $0.date < cutoff }
+    }
+
+    private func estimatedMinutesToFullFromSamples() -> Int? {
+        guard let currentPercent = batteryPercent,
+              currentPercent < 100 else {
+            return nil
+        }
+        guard let sample = chargingSamples.first(where: { $0.percent < currentPercent }) else {
+            return nil
+        }
+
+        let percentDelta = currentPercent - sample.percent
+        guard percentDelta > 0 else { return nil }
+
+        let minutesDelta = Date().timeIntervalSince(sample.date) / 60.0
+        guard minutesDelta >= 1 else { return nil }
+
+        let minutesPerPercent = minutesDelta / Double(percentDelta)
+        let remainingPercent = 100 - currentPercent
+        let estimate = Int((minutesPerPercent * Double(remainingPercent)).rounded())
+        return max(1, estimate)
+    }
+
+    private func formattedDuration(minutes: Int) -> String {
+        let value = max(1, minutes)
+        let hours = value / 60
+        let mins = value % 60
+
+        if hours == 0 {
+            return "\(mins)m"
+        }
+        if mins == 0 {
+            return "\(hours)h"
+        }
+        return "\(hours)h \(mins)m"
     }
 
     private func applyChargeLimitIfNeeded(force: Bool = false) {

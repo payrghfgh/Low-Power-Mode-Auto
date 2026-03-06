@@ -1,0 +1,33 @@
+name: Build And Release PKG
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-release:
+    runs-on: macos-14
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Build installer package
+        run: ./scripts/build_pkg.sh
+        working-directory: LowPowerAuto
+
+      - name: Upload package artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: LowPowerAutoInstaller
+          path: LowPowerAuto/dist/LowPowerAutoInstaller.pkg
+
+      - name: Publish GitHub release asset
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: LowPowerAuto/dist/LowPowerAutoInstaller.pkg

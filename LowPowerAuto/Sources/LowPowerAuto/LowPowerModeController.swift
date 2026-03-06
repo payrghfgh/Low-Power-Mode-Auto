@@ -7,6 +7,7 @@ enum CommandResult {
 }
 
 enum ChargeBackend: String {
+    case batt = "batt"
     case nativeBclm = "Native bclm"
     case pmsetBclm = "pmset bclm"
     case pmsetInhibit = "pmset chargeInhibit"
@@ -20,11 +21,7 @@ final class LowPowerModeController {
     private(set) var lastChargeError: String?
 
     func effectiveChargeLimit(percent: Int) -> Int {
-        let clamped = max(50, min(percent, 100))
-        if isAppleSilicon() {
-            return clamped <= 80 ? 80 : 100
-        }
-        return clamped
+        max(50, min(percent, 100))
     }
 
     func isLowPowerModeEnabled() -> Bool {
@@ -76,6 +73,21 @@ final class LowPowerModeController {
     ) -> CommandResult {
         let clamped = effectiveChargeLimit(percent: percent)
         if enabled {
+            if let battPath = preferredBattPath() {
+                let battResult = runPrivilegedBatt(at: battPath, arguments: ["limit", "\(clamped)"])
+                switch battResult {
+                case .success:
+                    lastChargeBackend = .batt
+                    lastChargeError = nil
+                    return .success
+                case let .failure(errorText):
+                    let message = "Failed to set charge limit (batt): \(errorText)"
+                    lastChargeBackend = .batt
+                    lastChargeError = message
+                    return .failure(message)
+                }
+            }
+
             let bclmResult = runPrivilegedBclmWrite(limit: clamped)
             if case .success = bclmResult {
                 lastChargeBackend = .nativeBclm
@@ -122,6 +134,21 @@ final class LowPowerModeController {
                 return .failure(message)
             }
         } else {
+            if let battPath = preferredBattPath() {
+                let battDisable = runPrivilegedBatt(at: battPath, arguments: ["disable"])
+                switch battDisable {
+                case .success:
+                    lastChargeBackend = .disabled
+                    lastChargeError = nil
+                    return .success
+                case let .failure(errorText):
+                    let message = "Failed to disable charge limit (batt): \(errorText)"
+                    lastChargeBackend = .batt
+                    lastChargeError = message
+                    return .failure(message)
+                }
+            }
+
             // Best effort reset: clear charge-inhibit and charge limit cap.
             _ = runPrivilegedBclmWrite(limit: 100)
             let inhibitReset = runPrivilegedPmset(arguments: ["-b", "chargeInhibit", "0"])
@@ -175,8 +202,19 @@ final class LowPowerModeController {
 
     func configurePasswordlessSudo() -> CommandResult {
         let username = NSUserName()
-        let bundledBclmPath = "/Applications/LowPowerAuto.app/Contents/Resources/bclm"
-        let rule = "\(username) ALL=(root) NOPASSWD: /usr/bin/pmset -a lowpowermode *, /usr/bin/pmset -a bclm *, /usr/bin/pmset -b chargeInhibit *, \(bundledBclmPath) write *"
+        let bundledBclmPath = bundledResourcePath(for: "bclm")
+        var allowedCommands = [
+            "/usr/bin/pmset -a lowpowermode *",
+            "/usr/bin/pmset -a bclm *",
+            "/usr/bin/pmset -b chargeInhibit *",
+            "\(bundledBclmPath) write *"
+        ]
+        for battPath in allowedBattPathsForSudoers() {
+            allowedCommands.append("\(battPath) limit *")
+            allowedCommands.append("\(battPath) disable")
+        }
+
+        let rule = "\(username) ALL=(root) NOPASSWD: \(allowedCommands.joined(separator: ", "))"
         let escapedRule = shellSingleQuoted(rule)
         let shellCommand = "printf %s\\\\n '\(escapedRule)' > /etc/sudoers.d/lowpowerauto && chmod 440 /etc/sudoers.d/lowpowerauto"
         let escapedShellCommand = shellCommand
@@ -211,8 +249,61 @@ final class LowPowerModeController {
         return .failure(errorText)
     }
 
+    private func runPrivilegedBatt(at battPath: String, arguments: [String]) -> CommandResult {
+        let result = runProcess("/usr/bin/sudo", ["-n", battPath] + arguments)
+        if result.status == 0 {
+            return .success
+        }
+        if result.stderr.localizedCaseInsensitiveContains("a password is required") ||
+            result.stderr.localizedCaseInsensitiveContains("not allowed") {
+            return .failure("One-time admin setup required. Click 'Enable one-time admin setup'.")
+        }
+        let rawError = result.stderr.isEmpty ? result.stdout : result.stderr
+        return .failure(sanitizeError(rawError.isEmpty ? "batt command failed" : rawError))
+    }
+
+    private func preferredBattPath() -> String? {
+        for path in battCandidatePaths() {
+            if FileManager.default.isExecutableFile(atPath: path) {
+                return path
+            }
+        }
+        return nil
+    }
+
+    private func allowedBattPathsForSudoers() -> [String] {
+        var paths = battCandidatePaths()
+        if !paths.contains("/opt/homebrew/bin/batt") {
+            paths.append("/opt/homebrew/bin/batt")
+        }
+        if !paths.contains("/usr/local/bin/batt") {
+            paths.append("/usr/local/bin/batt")
+        }
+        return paths
+    }
+
+    private func battCandidatePaths() -> [String] {
+        var ordered: [String] = []
+        ordered.append(bundledResourcePath(for: "batt"))
+
+        let whichResult = runProcess("/usr/bin/which", ["batt"])
+        let discovered = whichResult.stdout.trimmingCharacters(in: .whitespacesAndNewlines)
+        if !discovered.isEmpty {
+            ordered.append(discovered)
+        }
+
+        ordered.append("/opt/homebrew/bin/batt")
+        ordered.append("/usr/local/bin/batt")
+
+        var unique: [String] = []
+        for path in ordered where !unique.contains(path) {
+            unique.append(path)
+        }
+        return unique
+    }
+
     private func runPrivilegedBclmWrite(limit: Int) -> CommandResult {
-        let bclmPath = "/Applications/LowPowerAuto.app/Contents/Resources/bclm"
+        let bclmPath = bundledResourcePath(for: "bclm")
         guard FileManager.default.isExecutableFile(atPath: bclmPath) else {
             return .failure("bclm backend not installed")
         }
@@ -275,12 +366,11 @@ final class LowPowerModeController {
             lower.contains("not supported")
     }
 
-    private func isAppleSilicon() -> Bool {
-        var systemInfo = utsname()
-        uname(&systemInfo)
-        let machine = withUnsafePointer(to: &systemInfo.machine) {
-            $0.withMemoryRebound(to: CChar.self, capacity: 1) { String(cString: $0) }
+    private func bundledResourcePath(for executableName: String) -> String {
+        if let resourcePath = Bundle.main.resourcePath {
+            return (resourcePath as NSString).appendingPathComponent(executableName)
         }
-        return machine.contains("arm64")
+        return "/Applications/LowPowerAuto.app/Contents/Resources/\(executableName)"
     }
+
 }

@@ -25,7 +25,10 @@ struct StatusMenuView: View {
                 GroupBox("Status") {
                     VStack(spacing: 8) {
                         row("Battery", viewModel.batteryPercent.map { "\($0)%" } ?? "--")
+                        row("Plugged In", viewModel.isPluggedIn ? "Yes" : "No")
                         row("Charging", viewModel.isCharging ? "Yes" : "No")
+                        row("Charge target", "\(viewModel.chargeTargetPercent)%")
+                        row("Charge ETA", viewModel.chargeEtaText)
                         row("Low Power Mode", viewModel.lowPowerModeEnabled ? "On" : "Off")
                     }
                 }

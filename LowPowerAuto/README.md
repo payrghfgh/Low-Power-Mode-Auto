@@ -40,6 +40,20 @@ cd "/Users/rushian/LOW POWER MODE/LowPowerAuto"
 
 This installs `LowPowerAuto.app` into `/Applications`.
 
+## Install latest from GitHub (sudo)
+
+After you publish a release containing `LowPowerAutoInstaller.pkg`, users can install with:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/<owner>/<repo>/main/LowPowerAuto/scripts/install_latest_from_github.sh | sudo bash -s -- <owner>/<repo>
+```
+
+Example:
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/rushian/lowpowerauto/main/LowPowerAuto/scripts/install_latest_from_github.sh | sudo bash -s -- rushian/lowpowerauto
+```
+
 ## Build a proper installer (.pkg)
 
 ```bash
@@ -50,6 +64,12 @@ cd "/Users/rushian/LOW POWER MODE/LowPowerAuto"
 Output package:
 
 `/Users/rushian/LOW POWER MODE/LowPowerAuto/dist/LowPowerAutoInstaller.pkg`
+
+## GitHub release automation
+
+- Workflow file: `.github/workflows/release-pkg.yml`
+- Trigger: push a tag like `v1.0.0`
+- Result: builds `LowPowerAutoInstaller.pkg` and uploads it to the GitHub Release
 
 ### Signed package (optional)
 
@@ -74,8 +94,9 @@ APPLE_APP_PASSWORD="app-specific-password" \
 
 - `Launch at login` can be toggled directly inside the app.
 - For no repeated password prompts, click `Enable passwordless control (one-time)` in the app once.
-- That setup writes `/etc/sudoers.d/lowpowerauto` with limited rules for `pmset` and `/Applications/LowPowerAuto.app/Contents/Resources/bclm write *`.
-- Charge limit uses an independent bundled backend (`LowPowerAuto.app/Contents/Resources/bclm`) first, then `pmset` fallback.
+- That setup writes `/etc/sudoers.d/lowpowerauto` with limited rules for `pmset`, bundled `bclm`, and `batt`.
+- Charge limit uses bundled `batt` first (`batt limit` / `batt disable`), then bundled `bclm`, then `pmset` fallback.
+- Installer bundles native `batt` when available, otherwise a bundled `batt` shim that forwards to bundled `bclm`.
 - On Apple silicon, hardware limits only allow `80` or `100` as effective charge cap values.
 - If hardware charge-stop is blocked by the OS, the app falls back to software monitoring and sends a threshold alert to unplug the charger.
 - If your command line Swift toolchain and macOS SDK versions are mismatched, run through Xcode (uses integrated toolchain management).
